@@ -1,0 +1,50 @@
+name: ci-scoring-plazos
+
+on:
+  pull_request:
+    branches: [develop, main, "release/**"]
+  push:
+    branches: ["release/**", "hotfix/**"]
+    tags: ["v*"]
+
+jobs:
+  pruebas:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Pruebas unitarias y de aceptación
+        run: python -m unittest discover -s tests -v
+
+  validar-modelo:
+    needs: pruebas
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Entrenar con semilla fija y monitorizar
+        run: python pipelines/analisis.py salida
+      - name: Puertas de calidad (si una falla, el job falla)
+        run: python pipelines/puertas.py salida/resultados.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: informe-validacion
+          path: salida/resultados.json
+
+  imagen:
+    needs: validar-modelo
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Construir la imagen con la versión de la etiqueta
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          docker build --build-arg MODELO_VERSION="$VERSION" -t scoring-plazos:"$VERSION" .
+          docker run --rm scoring-plazos:"$VERSION" python -m unittest discover -s tests
